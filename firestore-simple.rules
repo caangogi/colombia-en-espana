@@ -1,0 +1,113 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // REGLAS SIMPLIFICADAS PARA DESARROLLO/TESTING
+    // ⚠️ ESTAS REGLAS SON MÁS PERMISIVAS - ÚSALAS SOLO PARA DESARROLLO
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserId() {
+      return request.auth.uid;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && getUserId() == userId;
+    }
+    
+    // === USUARIOS ===
+    // Los usuarios autenticados pueden gestionar su propio perfil
+    match /users/{userId} {
+      // Cualquier usuario autenticado puede leer su propio perfil
+      allow read: if isAuthenticated() && isOwner(userId);
+      
+      // Cualquier usuario autenticado puede crear su propio perfil
+      allow create: if isAuthenticated() && isOwner(userId);
+      
+      // Los usuarios pueden actualizar su propio perfil
+      allow update: if isAuthenticated() && isOwner(userId);
+      
+      // Por ahora, cualquier usuario puede eliminar su propio perfil
+      allow delete: if isAuthenticated() && isOwner(userId);
+    }
+    
+    // === LISTADOS DE NEGOCIOS ===
+    // Permisos básicos para negocios
+    match /businessListings/{businessId} {
+      // Todos pueden leer negocios (sin restricciones por ahora)
+      allow read: if true;
+      
+      // Usuarios autenticados pueden crear negocios
+      allow create: if isAuthenticated();
+      
+      // Propietarios pueden actualizar sus negocios
+      allow update: if isAuthenticated() && resource.data.userId == getUserId();
+      
+      // Propietarios pueden eliminar sus negocios
+      allow delete: if isAuthenticated() && resource.data.userId == getUserId();
+    }
+    
+    // === ANUNCIOS ===
+    match /advertisements/{adId} {
+      // Todos pueden leer anuncios
+      allow read: if true;
+      
+      // Usuarios autenticados pueden crear anuncios
+      allow create: if isAuthenticated();
+      
+      // Solo se permite actualizar/eliminar si existe el negocio asociado
+      allow update, delete: if isAuthenticated();
+    }
+    
+    // === BLOG POSTS ===
+    match /blogPosts/{postId} {
+      // Todos pueden leer posts publicados
+      allow read: if true;
+      
+      // Por ahora, cualquier usuario autenticado puede gestionar blog
+      // (en producción esto será solo para admins)
+      allow create, update, delete: if isAuthenticated();
+    }
+    
+    // === CONTACTO ===
+    match /contactSubmissions/{submissionId} {
+      // Los usuarios autenticados pueden leer sus propias submisiones
+      allow read: if isAuthenticated();
+      
+      // Cualquier usuario puede crear submisiones
+      allow create: if true;
+      
+      // Los usuarios autenticados pueden actualizar
+      allow update: if isAuthenticated();
+      
+      // Los usuarios autenticados pueden eliminar
+      allow delete: if isAuthenticated();
+    }
+    
+    // === PLANES DE SUSCRIPCIÓN ===
+    match /subscriptionPlans/{planId} {
+      // Todos pueden leer planes
+      allow read: if true;
+      
+      // Usuarios autenticados pueden gestionar planes
+      allow create, update, delete: if isAuthenticated();
+    }
+    
+    // === SESIONES Y ANALYTICS ===
+    match /userSessions/{sessionId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    match /analytics/{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // Regla por defecto: permitir acceso básico para desarrollo
+    match /{document=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+  }
+}

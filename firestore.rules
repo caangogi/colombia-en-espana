@@ -1,0 +1,179 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions para verificar roles y autenticación
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserId() {
+      return request.auth.uid;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && getUserId() == userId;
+    }
+    
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(getUserId())).data.role;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'admin';
+    }
+    
+    function isAnunciante() {
+      return isAuthenticated() && getUserRole() == 'anunciante';
+    }
+    
+    function isGuest() {
+      return isAuthenticated() && getUserRole() == 'guest';
+    }
+    
+    function hasRole(role) {
+      return isAuthenticated() && getUserRole() == role;
+    }
+    
+    // === USUARIOS ===
+    // Los usuarios pueden leer y actualizar su propio perfil
+    // Los admins pueden leer y modificar cualquier perfil
+    match /users/{userId} {
+      // Lectura: el propio usuario o admin
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Creación: cualquier usuario autenticado puede crear su propio perfil
+      allow create: if isAuthenticated() && isOwner(userId) && 
+        request.resource.data.keys().hasAll(['email', 'role', 'createdAt', 'updatedAt']) &&
+        request.resource.data.role in ['guest', 'admin', 'anunciante'];
+      
+      // Actualización: el propio usuario puede actualizar sus datos básicos
+      // Los admins pueden cambiar roles
+      allow update: if isOwner(userId) || isAdmin();
+      
+      // Eliminación: solo admins
+      allow delete: if isAdmin();
+    }
+    
+    // === LISTADOS DE NEGOCIOS ===
+    // Los anunciantes pueden gestionar sus propios negocios
+    // Los admins pueden gestionar todos los negocios
+    // Todos pueden leer negocios activos
+    match /businessListings/{businessId} {
+      // Lectura: todos pueden ver negocios activos, 
+      // propietarios y admins pueden ver todos los estados
+      allow read: if resource.data.status == 'active' || 
+        (isAuthenticated() && (resource.data.userId == getUserId() || isAdmin()));
+      
+      // Creación: solo anunciantes y admins
+      allow create: if isAuthenticated() && 
+        (isAnunciante() || isAdmin()) &&
+        request.resource.data.userId == getUserId() &&
+        request.resource.data.keys().hasAll(['businessName', 'description', 'category', 'userId']);
+      
+      // Actualización: propietario del negocio o admin
+      allow update: if isAuthenticated() && 
+        (resource.data.userId == getUserId() || isAdmin());
+      
+      // Eliminación: propietario del negocio o admin
+      allow delete: if isAuthenticated() && 
+        (resource.data.userId == getUserId() || isAdmin());
+    }
+    
+    // === ANUNCIOS ===
+    // Similar a los negocios, pero con más control de visibilidad
+    match /advertisements/{adId} {
+      // Lectura: anuncios aprobados para todos,
+      // propietarios y admins pueden ver todos
+      allow read: if resource.data.status == 'approved' || 
+        (isAuthenticated() && 
+         (get(/databases/$(database)/documents/businessListings/$(resource.data.businessId)).data.userId == getUserId() || 
+          isAdmin()));
+      
+      // Creación: propietarios de negocios y admins
+      allow create: if isAuthenticated() && 
+        (isAnunciante() || isAdmin()) &&
+        exists(/databases/$(database)/documents/businessListings/$(request.resource.data.businessId)) &&
+        get(/databases/$(database)/documents/businessListings/$(request.resource.data.businessId)).data.userId == getUserId();
+      
+      // Actualización: propietario del negocio asociado o admin
+      allow update: if isAuthenticated() && 
+        (get(/databases/$(database)/documents/businessListings/$(resource.data.businessId)).data.userId == getUserId() || 
+         isAdmin());
+      
+      // Eliminación: propietario del negocio asociado o admin
+      allow delete: if isAuthenticated() && 
+        (get(/databases/$(database)/documents/businessListings/$(resource.data.businessId)).data.userId == getUserId() || 
+         isAdmin());
+    }
+    
+    // === BLOG POSTS ===
+    // Solo admins pueden gestionar el blog
+    // Todos pueden leer posts publicados
+    match /blogPosts/{postId} {
+      // Lectura: posts publicados para todos, todos los posts para admins
+      allow read: if resource.data.status == 'publicado' || isAdmin();
+      
+      // Creación: solo admins
+      allow create: if isAdmin() &&
+        request.resource.data.keys().hasAll(['title', 'content', 'category', 'status']);
+      
+      // Actualización: solo admins
+      allow update: if isAdmin();
+      
+      // Eliminación: solo admins
+      allow delete: if isAdmin();
+    }
+    
+    // === CONTACTO ===
+    // Cualquier usuario puede enviar formularios de contacto
+    // Solo admins pueden leer las submisiones
+    match /contactSubmissions/{submissionId} {
+      // Lectura: solo admins
+      allow read: if isAdmin();
+      
+      // Creación: cualquier usuario autenticado
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasAll(['firstName', 'lastName', 'email', 'message']);
+      
+      // Actualización: solo admins (para cambiar status)
+      allow update: if isAdmin();
+      
+      // Eliminación: solo admins
+      allow delete: if isAdmin();
+    }
+    
+    // === PLANES DE SUSCRIPCIÓN ===
+    // Solo lectura para usuarios autenticados
+    // Solo admins pueden modificar
+    match /subscriptionPlans/{planId} {
+      // Lectura: usuarios autenticados pueden ver planes activos
+      allow read: if isAuthenticated() && resource.data.isActive == true;
+      
+      // Solo admins pueden crear, actualizar o eliminar planes
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // === SESIONES DE USUARIO ===
+    // Para tracking de sesiones (opcional)
+    match /userSessions/{sessionId} {
+      // Solo el propietario de la sesión puede leerla/escribirla
+      allow read, write: if isAuthenticated() && 
+        resource.data.userId == getUserId();
+      
+      // Admins pueden leer todas las sesiones para analytics
+      allow read: if isAdmin();
+    }
+    
+    // === ANALYTICS ===
+    // Solo admins pueden acceder a analytics
+    match /analytics/{document=**} {
+      allow read, write: if isAdmin();
+    }
+    
+    // Regla por defecto: denegar todo lo demás
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
